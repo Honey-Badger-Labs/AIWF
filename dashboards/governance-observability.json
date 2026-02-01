@@ -1,0 +1,278 @@
+{
+  "dashboard": {
+    "title": "AIWF SustainBot - Governance Observability",
+    "tags": ["aiwf", "sustainbot", "governance", "aim-drag"],
+    "timezone": "utc",
+    "schemaVersion": 38,
+    "version": 1,
+    "refresh": "30s",
+    "time": {
+      "from": "now-6h",
+      "to": "now"
+    },
+    "panels": [
+      {
+        "id": 1,
+        "title": "AIM Governance Requests (by DRAG Mode)",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+        "targets": [
+          {
+            "expr": "sum(rate(sustainbot_aim_requests_total[5m])) by (drag_mode)",
+            "legendFormat": "{{drag_mode}}"
+          }
+        ],
+        "legend": {"show": true},
+        "yaxes": [
+          {"format": "reqps", "label": "Requests/sec"}
+        ]
+      },
+      {
+        "id": 2,
+        "title": "AIM Validation Failures",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+        "targets": [
+          {
+            "expr": "sum(rate(sustainbot_aim_validation_failures_total[5m])) by (failure_reason)",
+            "legendFormat": "{{failure_reason}}"
+          }
+        ],
+        "legend": {"show": true},
+        "yaxes": [
+          {"format": "reqps", "label": "Failures/sec"}
+        ],
+        "alert": {
+          "name": "High AIM Validation Failure Rate",
+          "conditions": [
+            {
+              "evaluator": {"type": "gt", "params": [0.1]},
+              "query": {"params": ["A", "5m", "now"]},
+              "reducer": {"type": "avg"}
+            }
+          ],
+          "frequency": "1m",
+          "message": "AIM validation failure rate exceeds threshold"
+        }
+      },
+      {
+        "id": 3,
+        "title": "Workflow Execution Duration (p50, p95, p99)",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.50, sum(rate(sustainbot_governed_workflow_duration_seconds_bucket[5m])) by (workflow_name, le))",
+            "legendFormat": "{{workflow_name}} (p50)"
+          },
+          {
+            "expr": "histogram_quantile(0.95, sum(rate(sustainbot_governed_workflow_duration_seconds_bucket[5m])) by (workflow_name, le))",
+            "legendFormat": "{{workflow_name}} (p95)"
+          },
+          {
+            "expr": "histogram_quantile(0.99, sum(rate(sustainbot_governed_workflow_duration_seconds_bucket[5m])) by (workflow_name, le))",
+            "legendFormat": "{{workflow_name}} (p99)"
+          }
+        ],
+        "legend": {"show": true},
+        "yaxes": [
+          {"format": "s", "label": "Duration"}
+        ],
+        "alert": {
+          "name": "Slow Workflow Execution",
+          "conditions": [
+            {
+              "evaluator": {"type": "gt", "params": [30]},
+              "query": {"params": ["A", "5m", "now"]},
+              "reducer": {"type": "avg"}
+            }
+          ],
+          "frequency": "1m",
+          "message": "Workflow execution p95 exceeds 30 seconds"
+        }
+      },
+      {
+        "id": 4,
+        "title": "Workflow Outcomes (Success vs Failure)",
+        "type": "piechart",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+        "targets": [
+          {
+            "expr": "sum(sustainbot_workflow_executions_total) by (outcome)",
+            "legendFormat": "{{outcome}}"
+          }
+        ],
+        "pieType": "donut",
+        "legend": {"show": true, "values": true, "percentage": true}
+      },
+      {
+        "id": 5,
+        "title": "Audit Log Entries (by Outcome)",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+        "targets": [
+          {
+            "expr": "sum(rate(sustainbot_audit_log_entries_total[5m])) by (outcome)",
+            "legendFormat": "{{outcome}}"
+          }
+        ],
+        "legend": {"show": true},
+        "yaxes": [
+          {"format": "reqps", "label": "Entries/sec"}
+        ]
+      },
+      {
+        "id": 6,
+        "title": "JWT Authentication (Success vs Failure)",
+        "type": "stat",
+        "gridPos": {"h": 8, "w": 6, "x": 12, "y": 16},
+        "targets": [
+          {
+            "expr": "sum(sustainbot_jwt_validations_total{outcome=\"success\"})",
+            "legendFormat": "Success"
+          },
+          {
+            "expr": "sum(sustainbot_jwt_validations_total{outcome=\"failure\"})",
+            "legendFormat": "Failure"
+          }
+        ],
+        "options": {
+          "graphMode": "area",
+          "colorMode": "value",
+          "orientation": "auto"
+        }
+      },
+      {
+        "id": 7,
+        "title": "Active HTTP Requests",
+        "type": "gauge",
+        "gridPos": {"h": 8, "w": 6, "x": 18, "y": 16},
+        "targets": [
+          {
+            "expr": "sustainbot_active_requests"
+          }
+        ],
+        "options": {
+          "showThresholdLabels": false,
+          "showThresholdMarkers": true
+        },
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "max": 100,
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "green"},
+                {"value": 50, "color": "yellow"},
+                {"value": 80, "color": "red"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 8,
+        "title": "DRAG Mode Distribution",
+        "type": "table",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
+        "targets": [
+          {
+            "expr": "sum(sustainbot_aim_requests_total) by (drag_mode, actor_role, workflow_name)",
+            "format": "table",
+            "instant": true
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "excludeByName": {},
+              "indexByName": {},
+              "renameByName": {
+                "drag_mode": "DRAG Mode",
+                "actor_role": "Actor Role",
+                "workflow_name": "Workflow",
+                "Value": "Total Requests"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": 9,
+        "title": "HTTP Request Rate (by Endpoint)",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
+        "targets": [
+          {
+            "expr": "sum(rate(sustainbot_http_requests_total[5m])) by (endpoint, method)",
+            "legendFormat": "{{method}} {{endpoint}}"
+          }
+        ],
+        "legend": {"show": true},
+        "yaxes": [
+          {"format": "reqps", "label": "Requests/sec"}
+        ]
+      },
+      {
+        "id": 10,
+        "title": "Prescriptive Language Detections",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 24, "x": 0, "y": 32},
+        "targets": [
+          {
+            "expr": "sum(sustainbot_prescriptive_language_detections_total)"
+          }
+        ],
+        "options": {
+          "graphMode": "none",
+          "colorMode": "background",
+          "textMode": "value_and_name"
+        },
+        "alert": {
+          "name": "Prescriptive Language Detected",
+          "conditions": [
+            {
+              "evaluator": {"type": "gt", "params": [0]},
+              "query": {"params": ["A", "5m", "now"]},
+              "reducer": {"type": "diff"}
+            }
+          ],
+          "frequency": "1m",
+          "message": "Prescriptive language detected in AI output - governance violation"
+        }
+      }
+    ],
+    "annotations": {
+      "list": [
+        {
+          "name": "Deployments",
+          "datasource": "Prometheus",
+          "expr": "changes(sustainbot_application_info[5m]) > 0",
+          "tagKeys": "version",
+          "titleFormat": "Deployment",
+          "textFormat": "Version: {{version}}"
+        }
+      ]
+    },
+    "templating": {
+      "list": [
+        {
+          "name": "drag_mode",
+          "type": "query",
+          "query": "label_values(sustainbot_aim_requests_total, drag_mode)",
+          "multi": true,
+          "includeAll": true
+        },
+        {
+          "name": "workflow",
+          "type": "query",
+          "query": "label_values(sustainbot_aim_requests_total, workflow_name)",
+          "multi": true,
+          "includeAll": true
+        }
+      ]
+    }
+  }
+}

@@ -33,6 +33,20 @@ from governance import (
     filter_prescriptive_language,
     generate_governance_summary
 )
+from metrics import (
+    record_aim_request,
+    record_aim_validation_failure,
+    record_workflow_execution,
+    record_audit_log_entry,
+    record_slack_event,
+    record_slack_verification,
+    record_jwt_validation,
+    record_authentication_failure,
+    record_http_request,
+    get_metrics_text,
+    MetricsTimer,
+    active_requests
+)
 
 # Load environment variables
 load_dotenv()
@@ -113,6 +127,8 @@ def require_auth(f):
         token = request.headers.get('Authorization')
         if not token:
             logger.warning(f"Request to {request.path} without authorization")
+            record_authentication_failure('missing_token')
+            record_jwt_validation('failure')
             return {
                 "error": "Authorization header required",
                 "code": "AUTH_REQUIRED"
@@ -126,8 +142,11 @@ def require_auth(f):
             request.actor = payload.get('actor')
             request.role = payload.get('role', 'user')
             logger.info(f"Authenticated request from {request.actor}")
+            record_jwt_validation('success')
         except jwt.InvalidTokenError as e:
             logger.warning(f"Invalid token: {str(e)}")
+            record_authentication_failure('invalid_token')
+            record_jwt_validation('failure')
             return {
                 "error": "Invalid or expired token",
                 "code": "INVALID_TOKEN"
@@ -287,6 +306,16 @@ def log_workflow_execution(
         duration_seconds=duration_seconds
     )
     write_audit_log(entry)
+    
+    # Record metrics
+    record_audit_log_entry(outcome=outcome, drag_mode=drag_mode.value)
+    if duration_seconds:
+        record_workflow_execution(
+            workflow_name=workflow_name,
+            outcome=outcome,
+            duration_seconds=duration_seconds,
+            drag_mode=drag_mode.value
+        )
 
 
 # ============================================================================
@@ -410,6 +439,12 @@ def health():
             "error": "Health check failed",
             "code": "INTERNAL_ERROR"
         }, 500
+
+
+@app.route('/metrics', methods=['GET'])
+def metrics():
+    """Prometheus metrics endpoint"""
+    return get_metrics_text(), 200, {'Content-Type': 'text/plain; charset=utf-8'}
 
 
 @app.route('/governance/validate', methods=['POST'])
