@@ -1,0 +1,47 @@
+{
+  "bot_name": "SustainBot",
+  "bot_id": "sustainbot",
+  "version": "1.0.0",
+  "slack_app_id": "YOUR_SLACK_APP_ID",
+  "features": [
+    "slash_commands",
+    "event_subscriptions",
+    "interactive_components"
+  ],
+  "permissions": [
+    "chat:write",
+    "chat:write.public",
+    "commands",
+    "app_mentions:read",
+    "channels:history",
+    "channels:read",
+    "users:read"
+  ],
+  "slash_commands": [
+    {
+      "command": "/sustainbot",
+      "description": "Interact with SustainBot automation engine",
+      "usage_hint": "[help|status|run <workflow>|logs <id>]",
+      "should_escape": false
+    },
+    {
+      "command": "/sustainbot-workflows",
+      "description": "List available automation workflows",
+      "usage_hint": "",
+      "should_escape": false
+    },
+    {
+      "command": "/sustainbot-status",
+      "description": "Check SustainBot system status",
+      "usage_hint": "",
+      "should_escape": false
+    }
+  ],
+  "event_subscriptions": [
+    "app_mention",
+    "message.channels",
+    "message.groups"
+  ],
+  "request_url": "https://your-domain.com/slack/events",
+  "interactivity_url": "https://your-domain.com/slack/actions"
+}

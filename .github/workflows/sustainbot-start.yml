@@ -1,0 +1,89 @@
+name: Start SustainBot
+
+on:
+  workflow_run:
+    workflows: [Deploy OpenClaw]
+    types: [completed]
+  schedule:
+    - cron: '0 */4 * * *'
+  workflow_dispatch:
+    inputs:
+      workflow_name:
+        description: 'Workflow to execute'
+        required: false
+        default: 'all'
+
+jobs:
+  start:
+    name: Start SustainBot Automation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          pip install -r sustainbot/requirements.txt
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+
+      - name: Setup Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+
+      - name: Deploy SustainBot
+        run: |
+          gcloud compute scp -r sustainbot/ aiwf-compute-1:~/sustainbot \
+            --zone=${{ secrets.GCP_ZONE || 'us-central1-a' }} \
+            --project=${{ secrets.GCP_PROJECT_ID }}
+          
+          gcloud compute ssh aiwf-compute-1 \
+            --zone=${{ secrets.GCP_ZONE || 'us-central1-a' }} \
+            --project=${{ secrets.GCP_PROJECT_ID }} \
+            --command='cd ~/sustainbot && pip install -r requirements.txt && python main.py --init'
+
+      - name: Notify Slack Starting
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          payload: |
+            {
+              "text": "🤖 SustainBot Starting",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*SustainBot Status*\n🚀 Automation Engine Starting\n\nWorkflow: ${{ github.event.inputs.workflow_name || 'all' }}"
+                  }
+                }
+              ]
+            }
+
+      - name: Notify Slack Ready
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          payload: |
+            {
+              "text": "✅ SustainBot Ready",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*SustainBot Status*\n✅ Ready for Commands\n\nUse `/sustainbot help` to get started!"
+                  }
+                }
+              ]
+            }

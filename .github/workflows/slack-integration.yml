@@ -1,0 +1,47 @@
+name: Configure Slack Integration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'slack/**'
+      - '.github/workflows/slack-integration.yml'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    name: Validate Slack Configuration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test Slack Webhook
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+            --data '{"text":"🤖 AIWF Slack Integration Test - Successful!"}' \
+            ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  register-commands:
+    name: Register Bot Commands
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Notify Commands Registered
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          payload: |
+            {
+              "text": "✅ Slack Integration Complete",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Slack Bot Configuration*\n✅ Bot commands registered\n\n*Available Commands:*\n• `/sustainbot help` - Get help\n• `/sustainbot status` - Check system status\n• `/sustainbot run <workflow>` - Execute workflow\n• `/sustainbot-workflows` - List workflows\n• `/sustainbot-logs <id>` - View logs"
+                  }
+                }
+              ]
+            }

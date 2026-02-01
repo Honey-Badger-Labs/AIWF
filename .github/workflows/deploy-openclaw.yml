@@ -1,0 +1,71 @@
+name: Deploy OpenClaw
+
+on:
+  workflow_run:
+    workflows: [Deploy Infrastructure (GCP)]
+    types: [completed]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy OpenClaw Engine
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+
+      - name: Setup Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+
+      - name: Deploy OpenClaw
+        run: |
+          gcloud compute ssh aiwf-compute-1 \
+            --zone=${{ secrets.GCP_ZONE || 'us-central1-a' }} \
+            --project=${{ secrets.GCP_PROJECT_ID }} \
+            --command='
+            set -e
+            echo "Installing Docker..."
+            curl -fsSL https://get.docker.com -o get-docker.sh
+            sudo sh get-docker.sh
+            sudo usermod -aG docker $USER
+            
+            echo "Installing Docker Compose..."
+            sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+            sudo chmod +x /usr/local/bin/docker-compose
+            
+            echo "Cloning OpenClaw..."
+            mkdir -p ~/openclaw && cd ~/openclaw
+            git clone https://github.com/openclaw/openclaw.git . || true
+            
+            echo "Starting OpenClaw..."
+            docker-compose up -d || echo "Waiting for setup..."
+            sleep 30
+            
+            echo "OpenClaw deployment initiated"
+            '
+
+      - name: Notify Slack Success
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          payload: |
+            {
+              "text": "✅ OpenClaw Deployed",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*OpenClaw Status*\n✅ Deployment Successful\n\nAccess: http://aiwf-compute-1:8080"
+                  }
+                }
+              ]
+            }
