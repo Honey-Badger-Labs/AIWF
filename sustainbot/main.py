@@ -20,6 +20,19 @@ from dotenv import load_dotenv
 
 from models import LLMInterface
 from processes import WorkflowEngine
+from governance import (
+    DRAGMode,
+    AIMDeclaration,
+    Actor,
+    Input,
+    InputSource,
+    Mission,
+    GovernanceRequest,
+    AuditLogEntry,
+    validate_governance_request,
+    filter_prescriptive_language,
+    generate_governance_summary
+)
 
 # Load environment variables
 load_dotenv()
@@ -34,6 +47,10 @@ logger = logging.getLogger(__name__)
 # JWT Configuration
 JWT_SECRET = os.getenv('JWT_SECRET', 'dev-secret-key-change-in-production')
 JWT_ALGORITHM = 'HS256'
+
+# Governance Configuration
+AUDIT_LOG_PATH = os.getenv('AUDIT_LOG_PATH', './logs/audit.jsonl')
+GOVERNANCE_ENABLED = os.getenv('GOVERNANCE_ENABLED', 'true').lower() == 'true'
 
 # Flask app
 app = Flask(__name__)
@@ -201,6 +218,82 @@ def verify_slack_signature(req_body: bytes, req_headers: Dict[str, str]) -> bool
     return True
 
 
+# ============================================================================
+# AUDIT LOGGING
+# ============================================================================
+
+import uuid
+from pathlib import Path
+
+
+def write_audit_log(entry: AuditLogEntry):
+    """
+    Write audit log entry to append-only file.
+    
+    Creates directory if needed. Each entry is one JSON line.
+    Logs are tamper-evident with integrity hashes.
+    """
+    try:
+        # Ensure directory exists
+        log_path = Path(AUDIT_LOG_PATH)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Finalize entry (compute integrity hash)
+        entry.finalize()
+        
+        # Write as JSON line
+        with open(log_path, 'a') as f:
+            f.write(entry.json() + '\n')
+        
+        logger.info(f"Audit log written: {entry.trace_id}")
+        
+    except Exception as e:
+        logger.error(f"Failed to write audit log: {e}", exc_info=True)
+        # Don't fail workflow execution if audit logging fails
+        # but log the error for investigation
+
+
+def log_workflow_execution(
+    workflow_name: str,
+    aim: AIMDeclaration,
+    drag_mode: DRAGMode,
+    parameters: Dict[str, Any],
+    outcome: str,
+    error: Optional[str] = None,
+    duration_seconds: Optional[float] = None,
+    trace_id: Optional[str] = None
+):
+    """
+    Log workflow execution with complete governance context.
+    
+    Args:
+        workflow_name: Name of executed workflow
+        aim: Complete AIM declaration
+        drag_mode: DRAG responsibility mode
+        parameters: Workflow parameters
+        outcome: "success", "failure", or "rejected"
+        error: Error message if outcome="failure"
+        duration_seconds: Execution duration
+        trace_id: Trace ID for request correlation
+    """
+    entry = AuditLogEntry(
+        trace_id=trace_id or str(uuid.uuid4()),
+        aim=aim.to_dict(),
+        drag_mode=drag_mode.value,
+        workflow_name=workflow_name,
+        parameters=parameters,
+        outcome=outcome,
+        error=error,
+        duration_seconds=duration_seconds
+    )
+    write_audit_log(entry)
+
+
+# ============================================================================
+# SUSTAINBOT CLASS
+# ============================================================================
+
+
 class SustainBot:
     """Main SustainBot class for managing automation workflows"""
 
@@ -316,6 +409,245 @@ def health():
         return {
             "error": "Health check failed",
             "code": "INTERNAL_ERROR"
+        }, 500
+
+
+@app.route('/governance/validate', methods=['POST'])
+def validate_governance():
+    """
+    Validate governance request before workflow execution.
+    
+    This endpoint allows clients to validate their AIM-DRAG declaration
+    without executing the workflow.
+    
+    Request Body:
+        {
+            "workflow_name": "deploy-to-staging",
+            "aim": {
+                "actor": {"name": "...", "role": "...", "email": "..."},
+                "input": {"sources": [...], "constraints": [...]},
+                "mission": {"objective": "...", "success_criteria": [...]}
+            },
+            "drag_mode": "execute",
+            "parameters": {...}
+        }
+    
+    Response:
+        {
+            "valid": true|false,
+            "error": "..." (if invalid),
+            "summary": "..." (governance summary)
+        }
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return {"error": "Request body required", "code": "VALIDATION_ERROR"}, 400
+        
+        # Parse governance request
+        try:
+            gov_request = GovernanceRequest(**data)
+        except Exception as e:
+            return {
+                "valid": False,
+                "error": f"Invalid governance request: {str(e)}",
+                "code": "GOVERNANCE_ERROR"
+            }, 400
+        
+        # Validate governance
+        is_valid, error_msg = validate_governance_request(gov_request)
+        
+        if is_valid:
+            summary = generate_governance_summary(gov_request)
+            return {
+                "valid": True,
+                "summary": summary,
+                "drag_mode": gov_request.drag_mode.value,
+                "actor": gov_request.aim.actor.name
+            }, 200
+        else:
+            return {
+                "valid": False,
+                "error": error_msg,
+                "code": "GOVERNANCE_VALIDATION_FAILED"
+            }, 400
+    
+    except Exception as e:
+        logger.error(f"Governance validation error: {e}", exc_info=True)
+        return {
+            "error": "Governance validation failed",
+            "code": "INTERNAL_ERROR"
+        }, 500
+
+
+@app.route('/workflows/governed/execute', methods=['POST'])
+@require_auth
+def execute_governed_workflow():
+    """
+    Execute workflow with complete AIM-DRAG governance.
+    
+    This is the OTS-compliant endpoint that requires full governance context.
+    Use this for production workflows requiring accountability.
+    
+    Request Body:
+        {
+            "workflow_name": "deploy-to-staging",
+            "aim": {
+                "actor": {"name": "Jake Smith", "role": "DevOps Engineer", "email": "jake@sustainnet.io"},
+                "input": {
+                    "sources": [{"type": "slack_webhook", "description": "Slash command payload"}],
+                    "constraints": ["Read-only access", "No destructive operations"]
+                },
+                "mission": {
+                    "objective": "Deploy application to staging environment",
+                    "success_criteria": ["Zero downtime", "Health checks pass", "Rollback on failure"]
+                }
+            },
+            "drag_mode": "execute",
+            "parameters": {"environment": "staging", "version": "v1.2.3"}
+        }
+    
+    Response:
+        {
+            "success": true,
+            "trace_id": "...",
+            "outcome": "...",
+            "audit_logged": true,
+            "governance_summary": "..."
+        }
+    """
+    start_time = time.time()
+    trace_id = request.headers.get('X-Trace-ID', str(uuid.uuid4()))
+    
+    try:
+        data = request.get_json()
+        if not data:
+            return {"error": "Request body required", "code": "VALIDATION_ERROR"}, 400
+        
+        # Parse governance request
+        try:
+            gov_request = GovernanceRequest(**data, trace_id=trace_id)
+        except Exception as e:
+            logger.warning(f"Invalid governance request: {e}")
+            return {
+                "error": f"Invalid governance request: {str(e)}",
+                "code": "GOVERNANCE_ERROR",
+                "trace_id": trace_id
+            }, 400
+        
+        # Validate governance
+        is_valid, error_msg = validate_governance_request(gov_request)
+        if not is_valid:
+            logger.warning(f"Governance validation failed: {error_msg}")
+            
+            # Log rejection
+            if GOVERNANCE_ENABLED:
+                log_workflow_execution(
+                    workflow_name=gov_request.workflow_name,
+                    aim=gov_request.aim,
+                    drag_mode=gov_request.drag_mode,
+                    parameters=gov_request.parameters,
+                    outcome="rejected",
+                    error=error_msg,
+                    trace_id=trace_id
+                )
+            
+            return {
+                "error": error_msg,
+                "code": "GOVERNANCE_VALIDATION_FAILED",
+                "trace_id": trace_id
+            }, 400
+        
+        # Validate workflow name
+        validate_workflow_name(gov_request.workflow_name)
+        
+        # Log governance context
+        summary = generate_governance_summary(gov_request)
+        logger.info(f"Governed workflow execution:\n{summary}")
+        
+        # Execute workflow
+        logger.info(f"Executing governed workflow {gov_request.workflow_name} by {gov_request.aim.actor.name}")
+        result = bot.run_workflow(gov_request.workflow_name, gov_request.parameters)
+        
+        # Calculate duration
+        duration = time.time() - start_time
+        
+        # Determine outcome
+        outcome = "success" if result.get('success') else "failure"
+        error = result.get('error') if outcome == "failure" else None
+        
+        # Write audit log
+        if GOVERNANCE_ENABLED:
+            log_workflow_execution(
+                workflow_name=gov_request.workflow_name,
+                aim=gov_request.aim,
+                drag_mode=gov_request.drag_mode,
+                parameters=gov_request.parameters,
+                outcome=outcome,
+                error=error,
+                duration_seconds=duration,
+                trace_id=trace_id
+            )
+        
+        # Return response
+        if outcome == "success":
+            return {
+                "success": True,
+                "trace_id": trace_id,
+                "outcome": result.get('outcome', 'Workflow completed'),
+                "audit_logged": GOVERNANCE_ENABLED,
+                "governance_summary": summary,
+                "duration_seconds": round(duration, 2)
+            }, 200
+        else:
+            return {
+                "success": False,
+                "trace_id": trace_id,
+                "error": error,
+                "audit_logged": GOVERNANCE_ENABLED,
+                "governance_summary": summary,
+                "duration_seconds": round(duration, 2)
+            }, 500
+    
+    except ValidationError as e:
+        duration = time.time() - start_time
+        if GOVERNANCE_ENABLED and 'gov_request' in locals():
+            log_workflow_execution(
+                workflow_name=gov_request.workflow_name,
+                aim=gov_request.aim,
+                drag_mode=gov_request.drag_mode,
+                parameters=gov_request.parameters,
+                outcome="failure",
+                error=e.message,
+                duration_seconds=duration,
+                trace_id=trace_id
+            )
+        return {
+            "error": e.message,
+            "code": e.code,
+            "trace_id": trace_id
+        }, e.http_status
+    
+    except Exception as e:
+        duration = time.time() - start_time
+        logger.error(f"Governed workflow execution failed: {e}", exc_info=True)
+        
+        if GOVERNANCE_ENABLED and 'gov_request' in locals():
+            log_workflow_execution(
+                workflow_name=gov_request.workflow_name,
+                aim=gov_request.aim,
+                drag_mode=gov_request.drag_mode,
+                parameters=gov_request.parameters,
+                outcome="failure",
+                error=str(e),
+                duration_seconds=duration,
+                trace_id=trace_id
+            )
+        
+        return {
+            "error": "Internal server error",
+            "code": "INTERNAL_ERROR",
+            "trace_id": trace_id
         }, 500
 
 
