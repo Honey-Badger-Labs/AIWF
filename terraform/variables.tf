@@ -34,3 +34,9 @@ variable "environment" {
     error_message = "Environment must be development, staging, or production."
   }
 }
+
+variable "developer_ips" {
+  description = "List of developer IPs allowed SSH access (CIDR format)"
+  type        = list(string)
+  default     = ["0.0.0.0/0"]  # Change to your IP for production security: ["YOUR_IP/32"]
+}

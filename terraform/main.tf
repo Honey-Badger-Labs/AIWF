@@ -44,7 +44,7 @@ resource "google_compute_firewall" "aiwf_allow_ssh" {
     ports    = ["22"]
   }
 
-  source_ranges = ["0.0.0.0/0"]
+  source_ranges = var.developer_ips  # Restrict SSH to specific IPs
   target_tags   = ["aiwf-vm"]
 }
 
